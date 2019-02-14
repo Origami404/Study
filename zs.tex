@@ -1,0 +1,459 @@
+\documentclass[UTF8]{ctexart}
+\setCJKmainfont{Sarasa Mono CL}
+\usepackage{listings}
+\usepackage{fontspec}
+\usepackage{amsmath}
+\usepackage{color}
+\usepackage{geometry}
+\geometry{a4paper,scale=0.8} 
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{
+  language=C++,                   % the language of the code
+  basicstyle=\footnotesize,       % the size of the fonts that are used for the code
+  numbers=left,                   % where to put the line-numbers
+  numberstyle=\tiny\color{gray},  % the style that is used for the line-numbers
+  stepnumber=1,                   % the step between two line-numbers. If it's 1, each line 
+                                  % will be numbered
+  numbersep=5pt,                  % how far the line-numbers are from the code
+  backgroundcolor=\color{white},  % choose the background color. You must add \usepackage{color}
+  showspaces=false,               % show spaces adding particular underscores
+  showstringspaces=false,         % underline spaces within strings
+  showtabs=false,                 % show tabs within strings adding particular underscores
+  frame=single,                   % adds a frame around the code
+  rulecolor=\color{black},        % if not set, the frame-color may be changed on line-breaks within not-black text (e.g. commens (green here))
+  tabsize=2,                      % sets default tabsize to 2 spaces
+  captionpos=b,                   % sets the caption-position to bottom
+  breaklines=true,                % sets automatic line breaking
+  breakatwhitespace=false,        % sets if automatic breaks should only happen at whitespace
+  title=\lstname,                 % show the filename of files included with \lstinputlisting;
+                                  % also try caption instead of title
+  keywordstyle=\color{blue},      % keyword style
+  commentstyle=\color{dkgreen},   % comment style
+  stringstyle=\color{mauve},      % string literal style
+  escapeinside={\%*}{*)},         % if you want to add LaTeX within your code
+  morekeywords={ASTptr}            % if you want to add more keywords to the set
+}
+
+\title{LLVM影响下的编译器新生态}
+\author{高一4班 - 梁韬 - GitHub@Origami404}
+\begin{document}
+\maketitle
+\section{前言}
+21世纪以来, 新的编程语言的产生速度越来越快, 包括DSL在内的全新编程语言
+对于编译技术的质和量的要求也越来越高. 而反观Intel等硬件厂商, 指令集也
+越发复杂, 同时编译优化技术特别是GC及JIT技术的发展对于编译器作者的水平
+也提出了极高的要求. 面对这种困难, LLVM诞生了.
+
+
+LLVM是一个\textbf{自由软件项目}, 是一套编译器基础设施, 基于C++.
+LLVM的命名最早源于所谓\textbf{底层虚拟机(Low Level Virtual Machine)}
+但随着其本身的发展及壮大, 现在的LLVM只是单纯的作为一个无意义的名称, 用于
+统称LLVM项目下产生的各种工具, 如LLVM IR, lldg, LLVM C++ Standard Library
+等.
+
+
+本综述主要叙述LLVM对于编译器编写这一传统领域所带来的影响
+及基于LLVM编写编译器前端的基本流程.
+
+\section{LLVM对传统编译编译器编写的影响}
+传统的编译器实现一般包括两大部分七大模块. 
+第一个部分是\textbf{分析}.
+分析部分将源代码分解为多个组成要素, 并在这些组成要素上添加语法结构.
+在此部分编译器将捕获并处理全部的词法与语法错误, 收集整理与代码有关的
+其他信息, 最后构造出一种\textbf{中间表示(IR)}.
+
+
+第二个部分是\textbf{综合}.
+在此部分编译器开始着手优化并产生目标代码. 在这一部分编译器可能使用某些
+巧妙的算法进行机器无关的代码优化, 又或者使用某种依赖于目标平台或目标语言
+特性的优化机理进行优化, 最后产生的便是目标代码.
+
+
+在此划分之上编译器又被按功能分为七个模块, 分别是\textbf{词法分析}, 
+\textbf{语法分析}, \textbf{语义分析}, \textbf{中间代码生成}, 
+\textbf{机器无关代码优化}, \textbf{代码生成}, \textbf{机器相关代码生成}.
+其中词法分析, 语法分析, 语义分析及中间代码生成属于分析部分; 机器无关代码优化, 
+代码生成, 机器相关代码生成属于综合部分.
+
+
+读者不难发现, IR作为联系前端和后端的形式, 在编译器编写中具有重要作用.
+在一门语言的实现中, 除了语言本身的语法定义, 就属IR的定义最为重要. 
+泛观世界上成熟的编译器工具集和VM如GCC, LLVM, JVM, 甚至是LuaVM都定义了极为
+成熟和在一定程度上泛用的IR表示. 这些IR为平台的二次开发奠定了基础, 也是其能流行
+于世界的重要原因. 而相比起其他编译平台, LLVM的优势在于其IR的开发一开始就
+基于一个目标----多语言通用, 多范式支持, 多用途使用. 因而在快速实现编译器时
+LLVM具有天然的优势, 而其完全透明, 类型完备的IR也为基于该语言的开发工具提供
+了实现包括语法高亮, 语义代码补全等面给用户的功能的极大便利. 诸如Apple的Xcode,
+Microsoft的VSCode的C++插件等都支持对LLVM编译出的IR进行利用而改善用户体验的功能.
+这也是LLVM的一大优势.
+
+\section{利用LLVM实现编译器前端的基本流程}
+LLVM C++库对中间代码生成, 优化及跨平台机器代码生成提供了简洁易用的接口.
+在一般的编写流程中, 开发人员主要编写词法与语法分析器, 即俗称的Scanner与
+Parser, 而后通过在Parser得出的AST继承体系中加入调用LLVM生成IR的方法
+来生成LLVM IR, 极大的简化了开发流程. 对于某些对速度要求不高的需求, 
+开发人员甚至可以使用诸如Bison和flex等分析器生成器生成语法词法分析器,
+从而极大地降低了编译器开发的门槛. 同时也因为LLVM IR的生成一般基于AST, 
+而在AST层面往往可以对语言作出极其灵活的修改而不改变用户代码的感知, 故这种
+方法也具有极高的灵活性, 甚至在某些情况下能实现超出Python的metaclass和
+Java的Reflection的令人惊奇的灵活修改, 能在源代码层面实现原本许多嵌入式语言中
+在宿主层面才实现的特性.
+
+
+为更好的介绍LLVM C++接口, 在这里实现一个简短的带变量二元运算解析.
+我们的目标是支持诸如:
+\begin{lstlisting}[language = Python, numbers=left, numberstyle=\tiny]
+    def x = 2.44
+    def y_s = 300.45 + x
+    def c = (x + y_s)*3
+    c * 2 + x / y_s
+\end{lstlisting}
+的变量赋值与二元运算. 二元运算支持+, -, *, / 与(), 为了简便所有
+量的类型均为double. 更严谨的, 此语言的BNF如下: (也是一个LL(1)文法)
+\begin{equation}
+    programmer \; \rightarrow \; define \; | \; expression 
+\end{equation}
+\begin{equation}
+    define \; \rightarrow \; \textbf{def} \; Id \; \textbf{=} \; expression 
+\end{equation}
+\begin{equation}
+    expression \; \rightarrow \; primary \; [binop]
+\end{equation}
+\begin{equation}
+    primary \; \rightarrow \; Id \; 
+                    | \; Num \; 
+                    | \; \textbf{(} \; expression \; \textbf{)}
+\end{equation}
+\begin{equation} 
+    binop \; \rightarrow \; primary \; Op \; binop
+\end{equation}
+由于不是重点, 这里直接给出AST以及Scanner和parser的定义:
+\begin{lstlisting}[title=头文件, frame=shadowbox]
+// 编译命令
+// clang++ -g -O3 *.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core`
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+using std::unique_ptr;
+using std::string;
+using std::map;
+using std::move;
+using namespace llvm;
+\end{lstlisting}
+\begin{lstlisting}[title=AST, frame=shadowbox]
+// 这里是AST节点的定义
+namespace {
+    class ExprAST {
+        public:
+        virtual ~ExprAST() {}
+        // 用于生成IR
+        virtual Value* codegen() = 0;
+    };
+    using ASTptr = unique_ptr<ExprAST>;
+    class NumAST : public ExprAST { 
+        double val;
+        public: 
+        NumAST(double v): val(v) {}
+        virtual Value* codegen();
+    };
+    class VarAST : public ExprAST {
+        string name;
+        public:
+        VarAST(const string& n): name(n) {}
+        virtual Value* codegen();
+    };
+    class BinOpAST : public ExprAST {
+        char op;
+        unique_ptr<ExprAST> lhs, rhs;
+        public:
+        BinOpAST(char op, ASTptr LHS, ASTptr RHS) 
+            : op(op), lhs(move(LHS)), rhs(move(RHS)) {}
+        virtual Value* codegen();
+    };
+    class DefAST {
+        string name;
+        ASTptr val;
+        public:
+        DefAST(const string& name, ASTptr val) 
+            : name(name), val(move(val)) {}
+        virtual void codegen();
+    };
+}
+\end{lstlisting}
+下面是一些主要环境变量和辅助函数:
+\begin{lstlisting}[title=环境, frame=shadowbox]
+enum Token {
+    tok_eof = -1,
+    tok_identifier = -2,
+    tok_number = -3,
+    tok_def = -4,
+    tok_end = -5
+};
+
+static string identifier_str;
+static double num_val;
+
+int gettok() {
+    static int last_char = ' ';
+    while (isspace(last_char))
+        last_char = getchar();
+    // identifier || def
+    if (isalpha(last_char)) {
+        identifier_str = last_char;
+        while (isalnum(last_char = getchar()))
+            identifier_str += last_char;
+        // def
+        if (identifier_str == "def")
+            return tok_def;
+        return tok_identifier;
+    }
+    // Number, a small bug
+    if (isdigit(last_char) || last_char == '.') {
+        string num_str;
+        do {
+            num_str += last_char;
+            last_char = getchar();
+        } while (isdigit(last_char) || last_char == '.');
+        num_val = strtod(num_str.c_str(), nullptr);
+        return tok_number;
+    }
+    // EOF
+    if (last_char == EOF)
+        return tok_eof;
+    if (last_char == ';'){
+        last_char = getchar();
+        return tok_end;
+    }
+        
+    // Operators 
+    int this_char = last_char;
+    last_char = getchar();
+    return this_char;
+}
+// 递归下降解析器的预读字符缓冲
+int cur_tok; 
+int next_token() {
+    return (cur_tok = next_token());
+}
+ASTptr Error(const char* str) {
+    fprintf(stderr, "Error: %s\n", str);
+    return nullptr;
+} 
+// 用于递归下降解析的运算符优先级表
+map<char, int> op_prec;
+int get_prec(char c) {
+    auto prec = op_prec.find(c);
+    if (prec == op_prec.end())
+        return -1;
+    else return prec->second;
+}
+
+ASTptr Error(const char* str) {
+    fprintf(stderr, "Error: %s\n", str);  
+    return nullptr;
+}
+\end{lstlisting} 
+同时一个简单的解析器也在下方给出, 注意本代码出于演示目的忽略了很多错误处理.
+\begin{lstlisting}[title=解析器, frame=shadowbox] 
+ASTptr parse_expression();
+unique_ptr<DefAST> parse_define();
+ASTptr parse_primary();
+ASTptr parse_binop(int expr_prec, ASTptr lhs);
+ASTptr parse_id();
+ASTptr parse_num();
+ASTptr parse_paren();
+
+/// programmer ::= define | expression
+// 同时承担程序入口的责任
+void parse_programmer() {
+    while (true) {
+        printf("ready> ");
+        switch (cur_tok) {
+            case tok_eof: return;
+            case tok_def: parse_define()->codegen(); break;
+            case tok_end: break;
+            default: parse_expression()->codegen()->print(errs());
+        }
+        next_token();
+    }
+}
+/// define ::= 'def' Id '=' expression
+unique_ptr<DefAST> parse_define() {
+    next_token(); // eat def
+    auto name = identifier_str;
+    next_token(); // eat '='
+    next_token();
+    auto val = parse_expression();
+    return llvm::make_unique<DefAST>(DefAST(name, move(val)));
+}
+/// expr ::= primary [binop]
+ASTptr parse_expression() {
+    return parse_binop(0, parse_primary());
+}
+/// primary ::= Id | Num | paren
+ASTptr parse_primary() {
+    switch (cur_tok) {
+        case tok_identifier:
+            return parse_id();
+        case tok_number: 
+            return parse_num();
+        case '(':
+            return parse_paren();
+        default:
+            return Error("Unknown token in primary");
+    }
+}
+/// paren ::= '(' expression ')'
+ASTptr parse_paren() {
+    next_token(); // eat (
+    auto expr = parse_expression();
+    if (cur_tok != ')')
+        return Error("Unmatch paren");
+    next_token(); // eat )
+    return expr;
+}
+/// binop ::= primary Op binop
+ASTptr parse_binop(int expr_prec, ASTptr lhs) {
+    while (true) {
+        int now_prec = get_prec(cur_tok);
+        if (now_prec < expr_prec)
+            return lhs;
+            
+        int binop = cur_tok;
+        next_token(); 
+        auto rhs = parse_primary();
+
+        int next_prec = get_prec(cur_tok);
+        if (now_prec < next_prec) 
+            rhs = parse_binop(expr_prec + 1, move(rhs));
+        lhs = llvm::make_unique<BinOpAST>(binop, move(lhs), move(rhs));
+    }
+}
+
+ASTptr parse_num() {
+    auto res = llvm::make_unique<NumAST>(num_val);
+    next_token();
+    return move(res);
+}
+ 
+ASTptr parse_id() {
+    auto res = llvm::make_unique<VarAST>(identifier_str);
+    next_token();
+    return move(res);
+}
+\end{lstlisting}
+下面就是本节讲述的重点: LLVM IR C++ API.
+我们使用AST节点的codegen虚方法来递归地生成IR, 您将看到
+这种生成方法是如此强大与方便, 以至于代码量还不及解析器:
+\begin{lstlisting}[title=IR生成, frame=shadowbox] 
+// LLVM API 文档(英文): https://llvm.org/docs/LangRef.html 
+static LLVMContext my_context;
+static IRBuilder<> builder(my_context);
+static unique_ptr<Module> my_module;
+static map<string, Value *> named_vals;
+Value *LogErrorV(const char *str) {
+  LogError(str);
+  return nullptr;
+}
+
+Value* NumAST::codegen() {
+    return ConstantFP::get(my_context, APFloat(this->val));
+}
+Value* VarAST::codegen() {
+    Value* v = named_vals[this->name];
+    if (!v)
+        return LogErrorV("undefine variable name");
+    return v;
+}
+Value* BinOpAST::codegen() {
+    Value* l = this->lhs->codegen();
+    Value* r = this->rhs->codegen();
+    if (!l || !r)
+        return nullptr;
+    switch (this->op) {
+        case '+':
+            return builder.CreateFAdd(l, r, "addtmp");
+        case '-':
+            return builder.CreateFSub(l, r, "subtmp");
+        case '*':
+            return builder.CreateFMul(l, r, "multmp");
+        case '/':
+            return builder.CreateFDiv(l, r, "divtmp");
+        default: return LogErrorV("unexpect binop");
+    }
+}
+void DefAST::codegen() {
+    printf("Name: %s defined\n", this->name.c_str());
+    named_vals[this->name] = this->val->codegen();
+} 
+\end{lstlisting}
+从上述代码可以看出LLVM IR C++ API的完善与简洁.在保留了
+比C更贴近一点底层的表示的同时很好地维护了IR的类型信息.
+完整的LLVM API可以在LLVM的网站上查询. 
+
+
+使用测试样例运行程序:
+\begin{lstlisting}[title=测试, language=Python]
+ready> def x = 42.0;
+ready> def y = 3.2*x; 
+ready> x+y; 
+double 1.764000e+02 
+ready> 
+\end{lstlisting}
+可以看到LLVM会在生成IR中就为我们完成简单的常量常量折叠,
+事实上在这个小例子中LLVM甚至能帮我们完成\textbf{全部}
+的运算并折叠成一个常量. 注意这在LLVM的分类中
+\textbf{"连优化都算不上"}, 是默认开启的. LLVM对
+机器无关的代码优化能力可见一斑.
+
+
+但即使是这种小例子也足以折射出LLVM IR的一个特点:
+强类型. LLVM IR对于类型是极为严格的, 甚至不允许C的很多
+符合常理的隐式类型转换, 这一点也在后续的优化中发挥很大的作用.
+
+\section{总结与参考引用}
+本综述阐述了基于LLVM编写编译器前端的基本流程, 为今后开展
+编译技术方面研究性学习奠定了坚实的基础. 今后的研究性学习
+将着手于编译器前端技术的学习, 实现一个简单的Scheme解释器
+与C编译器.
+
+
+本文主要参考:
+LLVM Tutorial : https://llvm.org/docs/tutorial/index.html
+
+
+LLVM Document : https://llvm.org/docs/LangRef.html 
+
+
+Wikipedia : https://www.wikipedia.org/
+
+
+<<编译原理>> 机械工业出版社, 第二版.
+
+
+<<深入理解计算机系统>> 机械工业出版社, 第三版.
+
+
+代码地址:
+
+
+
+\end{document}  
